@@ -1,4 +1,4 @@
-Flask==Flask 3.0.3
+Flask==3.0.3
 opencv-python==4.10.0
 numpy==2.0.1
 pyautogui==0.9.54
