@@ -1,12 +1,19 @@
 from flask import Flask, request, jsonify, send_file, render_template
 import cv2
-import pyautogui
 import numpy as np
 import time
 import threading
 import logging
 import tempfile
 import os
+
+# Conditionally import pyautogui if not running on a headless environment
+try:
+    import pyautogui
+    display_available = True
+except ImportError:
+    display_available = False
+
 from plyer import notification
 from werkzeug.utils import secure_filename
 
@@ -25,7 +32,7 @@ class ScreenRecorder:
         self.filename = filename
         self.frame_rate = frame_rate
         self.codec = codec
-        self.screen_size = pyautogui.size()
+        self.screen_size = (1920, 1080)  # Default size for server
         self.video = None
         self.paused = False
         self.start_time = None
@@ -52,8 +59,12 @@ class ScreenRecorder:
         try:
             while not stop_event.is_set():
                 if not self.paused:
-                    img = pyautogui.screenshot()
-                    frame = np.array(img)
+                    if display_available:
+                        img = pyautogui.screenshot()
+                        frame = np.array(img)
+                    else:
+                        # Mock image if no display
+                        frame = np.zeros((self.screen_size[1], self.screen_size[0], 3), dtype=np.uint8)
                     frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
 
                     if self.video is not None:
