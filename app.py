@@ -1,34 +1,84 @@
-from flask import Flask, send_file, render_template, request
+from flask import Flask, request, jsonify, send_file, render_template
 import cv2
-import numpy as np
 import pyautogui
-import os
+import numpy as np
+import time
 import threading
+import logging
+import tempfile
+import os
+from plyer import notification
+from werkzeug.utils import secure_filename
+
+# Configure logging
+logging.basicConfig(filename='app.log', level=logging.ERROR)
 
 app = Flask(__name__)
 
-VIDEO_PATH = os.path.join(os.getcwd(), "video.mp4")
-recording = False
-out = None
+# Global variables
+recorder = None
+recording_thread = None
+stop_event = threading.Event()
 
-def record_screen():
-    global recording, out
-    SCREEN_SIZE = tuple(pyautogui.size())
-    fourcc = cv2.VideoWriter_fourcc(*'mp4v')  # Use mp4v codec for MP4 format
-    fps = 12.0
-    out = cv2.VideoWriter(VIDEO_PATH, fourcc, fps, SCREEN_SIZE)
-    
-    while recording:
-        img = pyautogui.screenshot()  # Capture the entire screen
-        frame = np.array(img)
-        frame = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)  # Convert RGB to BGR for OpenCV
+class ScreenRecorder:
+    def __init__(self, filename, frame_rate, codec):
+        self.filename = filename
+        self.frame_rate = frame_rate
+        self.codec = codec
+        self.screen_size = pyautogui.size()
+        self.video = None
+        self.paused = False
+        self.start_time = None
 
-        out.write(frame)  # Write the frame to the video file
+    def start_recording(self):
+        try:
+            # Initialize video writer
+            self.video = cv2.VideoWriter(self.filename, cv2.VideoWriter_fourcc(*self.codec), self.frame_rate, self.screen_size)
+            notification.notify(
+                title='SCREEN RECORDING!',
+                message="Your screen is being recorded...",
+                app_name="Screen Recorder"
+            )
+            print("Status: Recording...")
 
-        # Optional: Save a few frames for debugging
-        # cv2.imwrite("frame.png", frame)
+            self.start_time = time.time()
+            self.recording_loop()
 
-    out.release()
+        except Exception as e:
+            logging.error(f"An error occurred: {str(e)}")
+            print("Status: Error occurred during recording")
+
+    def recording_loop(self):
+        try:
+            while not stop_event.is_set():
+                if not self.paused:
+                    img = pyautogui.screenshot()
+                    frame = np.array(img)
+                    frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+
+                    if self.video is not None:
+                        self.video.write(frame)
+
+                time.sleep(1 / self.frame_rate)
+
+        except Exception as e:
+            logging.error(f"An error occurred: {str(e)}")
+            print("Status: Error occurred during recording")
+
+    def stop_recording(self):
+        if self.video:
+            self.video.release()
+            self.video = None
+            cv2.destroyAllWindows()
+            notification.notify(
+                title='RECORDING ENDED!',
+                message="Recording stopped. Your file has been saved successfully.",
+                app_name="Screen Recorder"
+            )
+            print("Status: Recording stopped")
+
+    def get_video_file(self):
+        return self.filename
 
 @app.route('/')
 def index():
@@ -36,30 +86,45 @@ def index():
 
 @app.route('/start_recording', methods=['POST'])
 def start_recording():
-    global recording
-    if not recording:
-        recording = True
-        threading.Thread(target=record_screen).start()
-        return "Recording started!"
-    return "Already recording!"
+    global recorder, recording_thread, stop_event
+    if recorder and recording_thread and recording_thread.is_alive():
+        return jsonify({"error": "Recording is already in progress"}), 400
+
+    filename = 'output.avi'
+    frame_rate = int(request.form.get('frame_rate', 30))
+    codec = request.form.get('codec', 'MJPG')
+
+    # Create a temporary file for video
+    with tempfile.NamedTemporaryFile(delete=False, suffix='.avi') as temp_file:
+        temp_filename = temp_file.name
+
+    recorder = ScreenRecorder(temp_filename, frame_rate, codec)
+    stop_event.clear()
+    recording_thread = threading.Thread(target=recorder.start_recording)
+    recording_thread.start()
+
+    return jsonify({"status": "Recording started"}), 200
 
 @app.route('/stop_recording', methods=['POST'])
 def stop_recording():
-    global recording
-    if recording:
-        recording = False
-        return "Recording stopped!"
-    return "No recording in progress!"
+    global recorder, recording_thread, stop_event
+    if not recorder or not recording_thread or not recording_thread.is_alive():
+        return jsonify({"error": "No recording in progress"}), 400
 
-@app.route('/download_video')
-def download_video():
-    if os.path.exists(VIDEO_PATH):
-        try:
-            return send_file(VIDEO_PATH, as_attachment=True)
-        except Exception as e:
-            return f"Error serving file: {e}"
-    else:
-        return "No video found."
+    stop_event.set()
+    recording_thread.join()
+    recorder.stop_recording()
 
-if __name__ == '__main__':
-    app.run(debug=True)
+    # Provide the recorded file as a downloadable response
+    video_file = recorder.get_video_file()
+    return send_file(video_file, as_attachment=True, download_name='recording.avi')
+
+@app.route('/status', methods=['GET'])
+def status():
+    global recorder, recording_thread
+    if recorder and recording_thread and recording_thread.is_alive():
+        return jsonify({"status": "Recording in progress"}), 200
+    return jsonify({"status": "No recording in progress"}), 200
+
+if __name__ == "__main__":
+    app.run(host='0.0.0.0', port=5000)
