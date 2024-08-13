@@ -1,21 +1,13 @@
-from flask import Flask, request, jsonify, send_file, render_template
 import cv2
 import numpy as np
+import mss
 import time
 import threading
 import logging
 import tempfile
 import os
-
-# Conditionally import pyautogui if not running on a headless environment
-try:
-    import pyautogui
-    display_available = True
-except ImportError:
-    display_available = False
-
+from flask import Flask, request, jsonify, send_file, render_template
 from plyer import notification
-from werkzeug.utils import secure_filename
 
 # Configure logging
 logging.basicConfig(filename='app.log', level=logging.ERROR)
@@ -32,7 +24,7 @@ class ScreenRecorder:
         self.filename = filename
         self.frame_rate = frame_rate
         self.codec = codec
-        self.screen_size = (1920, 1080)  # Default size for server
+        self.screen_size = (1920, 1080)  # Set default resolution; you can adjust as needed
         self.video = None
         self.paused = False
         self.start_time = None
@@ -57,20 +49,17 @@ class ScreenRecorder:
 
     def recording_loop(self):
         try:
-            while not stop_event.is_set():
-                if not self.paused:
-                    if display_available:
-                        img = pyautogui.screenshot()
+            with mss.mss() as sct:
+                while not stop_event.is_set():
+                    if not self.paused:
+                        img = sct.grab(sct.monitors[1])  # Capture the first monitor
                         frame = np.array(img)
-                    else:
-                        # Mock image if no display
-                        frame = np.zeros((self.screen_size[1], self.screen_size[0], 3), dtype=np.uint8)
-                    frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                        frame = cv2.cvtColor(frame, cv2.COLOR_RGBA2BGR)  # Convert RGBA to BGR
 
-                    if self.video is not None:
-                        self.video.write(frame)
+                        if self.video is not None:
+                            self.video.write(frame)
 
-                time.sleep(1 / self.frame_rate)
+                    time.sleep(1 / self.frame_rate)
 
         except Exception as e:
             logging.error(f"An error occurred: {str(e)}")
